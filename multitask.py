@@ -1,319 +1,269 @@
+#' ---
+#' layout: "post"
+#' title: "A Simple Loss Function for Multi-Task learning with Keras implementation, part&nbsp;2"
+#' date: "2018-03-23 10:45"
+#' ---
 
-#' If you missed my blog post on multitask learning and want to follow this
-#' notebook, I highly recommend you start there. Here we'll perform a few
-#' experiments to discuss the applicability of the new loss function and to show
-#' how to implement it in Keras, a Python library that implements neural nets.
-#' We will start with a set of tasks that ideally fulfill the assumptions under
-#' which the loss function was derived and show the increased performance, at
-#' least for this example. Then we will follow with a different examples that
-#' doesn't fit so well the assumptions, and show that it doesn't work as well.
 
-#' ##Learning the $\sin$ function
 
-#' We'll keep it simple by choosing to learn the `sin` with different amount of
-#' gaussian noise superimposed. We'll start with some standard imports:
+#' In this post, we show how to implement a custom loss function for multitask
+#' learning in Keras and perform a couple of simple experiments with itself.
+#' <!-- more -->
 
-import pandas as pd
-import math
+#' In a [previous
+#' post](/2018/03/a-simple-loss-function-for-multi-task-learning-with-keras-implementation.html),
+#' I filled in some details of [recent work](https://arxiv.org/abs/1705.07115)
+#' on on multitask learning. Here we'll perform a few experiments to discuss the
+#' applicability of the new loss function described therein and show an
+#' implementation in Keras, a Python library for neural networks.  We will start
+#' with a set of tasks that ideally fulfill the assumptions under which the loss
+#' function was derived and show the increased performance. Then we will follow
+#' with a different examples that doesn't fit so well the assumptions, and show
+#' that it doesn't work as well.  Only the ML-related code is shown here, but
+#' the rest is [available](https://github.com/piccolbo/multitask)
+
+#+ echo=False, results="hidden"
 import numpy as np
+import pandas as pd
+import sys
 import warnings
+
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
-    import ggplot as gg
+    import ggplot  # only to prevent warnings elsewhere
+    import keras.losses as kl
+    # workaround for pwave path issue
+    sys.path.insert(0, ".")
+    import multitask_lib as mtl
 
-#' Then we are going to generate some data randomly in the `[0,1]` interval:
+# import importlib as il
+# il.reload(mtl)
 
-N = 2000
-xx = np.random.uniform(0, 1, N)
-y = [math.sin(x * 2 * math.pi) for x in xx]
-n_tasks = 5
+np.random.seed(seed=1)
 
-#' We then pick 5 numbers to use as standard deviations and then draw from
-#' normal distributions with 0 means and these standard deviations to obtain 5
-#' ever more noisy versions of the original task. We finally add tow columns
-#' with the values of the independent variable and the original, noiseless
-#' dependent variable values, for ease of plotting:
+#' ## Learning the $$\sin$$ function with noise
 
-sds = [.1 * 2**i for i in range(0, n_tasks)]
-data = pd.DataFrame(
-    {i: y + np.random.normal(0, sds[i], N)
-     for i in range(len(sds))})
-data.columns = ["y" + str(c) for c in data.columns]
-data["x"] = xx
-data["y"] = y
+#' We'll keep it simple by choosing to learn the $$\sin$$ function in the $$[0,
+#' 2\pi]$$ interval with different amounts of gaussian noise added.  The first
+#' task is generating some data to feed into this experiment.  We sample the
+#' independent variable to randomly in the $$[0,1]$$ interval,  then pick 5
+#' numbers to use as standard deviations and then draw from normal distributions
+#' with 0 means and these standard deviations to obtain 5 progressively more
+#' noisy versions of the original task. We finally add two columns with the
+#' values of the independent variable and the original, noiseless dependent
+#' variable values, for ease of plotting (`np` is short for `numpy` and `pd` for
+#' `pandas`):
+
+#+ source="mtl.make_data_hetero"
+
+data_hetero = mtl.make_data_hetero()
 
 #' Let's take a look: we have 7 columns, 5 with the dependent variables, which
 #' we will try to learn simultaneously, one for the dependent variable and one
 #' for the noiseless values on which the five tasks are based:
-
-data.head()
-
-#' Admittedly, an ideal situation as all the assumptions on which the multitask
-#' loss function is based are fulfilled. Also, the 5 learning tasks are very
-#' closely related, as the "learnable" part of each task is the same, even if
-#' the
-#' data looks different. Let's split the data in train, test and stop data set.
-#' I
-#' need a stop dataset because I plan to use *early stopping* to protect
-#' against
-#' overfitting, but in many papers the test set is used for such purpose. I
-#' believe a true test set and a learning alogrithm need to have an "air gap"
-#' for the test set to fulfil its task, as many Netflix competitions have amply
-#' demonstrated. But I digress.
+#+ results="raw"
+mtl.print_table(data_hetero.head())
 
 
-def split_data(data):
-    """Split a dataset in three chunks in 1:9:10 proportions.
+#' While discussing multitask learning is not the goal here, this is a
+#' favorable setting for it, with 5 closely related tasks in that the target
+#' values are the same for all the tasks. But the 5 tasks are also different
+#' since they are progressively more noisy, a problem the multitask loss here
+#' presented is designed to tackle.  Let's split the data in train, test and
+#' stop data set.  I need a stop dataset because I plan to use *early stopping*
+#' to protect against overfitting, but in many papers the test set is used for
+#' such purpose. I believe a true test set and a learning algorithm need to have
+#' an "air gap" for the test set to fulfil its task, as many Kaggle competitions
+#' have amply
+#' [demonstrated](http://blog.kaggle.com/2012/07/06/the-dangers-of-overfitting-psychopathy-post-mortem/).
 
-    Parameters
-    ----------
-    data : type
-        DataFrame to split.
+#+ source="mtl.split_data"
+data_hetero_train, data_hetero_stop, data_hetero_test = mtl.split_data(
+    data_hetero)
 
-    Returns
-    -------
-    type
-        A tuple with three data frames.
+#' You may have noticed that stop and test sets are much bigger then the
+#' training set. I  wanted to keep the task difficult but have  reliable ways to
+#' avoid overfitting and to evaluate the effect of the change in loss function,
+#' which is the only goal of this exercise. In practice, such a split is not
+#' commonly used.
 
-    """
-    N = data.shape[0]
-    return data[0:N // 20], data[N // 20:N // 2], data[N // 2:N]
+#' First let's take a peek at the training set:
 
+#+ results="hidden", echo = False
+mtl.facet_plot(data_hetero_train.drop(["y"], axis=1))
 
-data_train, data_stop, data_test = split_data(data)
+#' As you can see, progressively more noisy versions of the same task.
 
-
-#' You may have notived that stop and test set are much bigger then the training
-#' set. I just wanted to keep the task difficult but have a less noisy way to avoid
-#' overfitting and to evaluate the effect of the change in loss function, which is
-#' the only goal of this exercise. In practice, one would not use a dataset this
-#' way.
-
-#' Let's define a simple plotting function to see what's in the data set, and take
-#' a peek:
-
-
-def facet_plot(data):
-    """Generate a line plot with one facet per column from a data frame.
-
-    Parameters
-    ----------
-    data : type
-        A data frame with one column named x as the independent variable.
-
-    Returns
-    -------
-    type
-        None, but displays graphics.
-
-    """
-    print(gg.ggplot(
-        data=data.melt(id_vars=["x"]), aesthetics=gg.aes(x="x", y="value")) +
-          gg.geom_point(size=2) + gg.facet_wrap("variable"))
-
-
-facet_plot(data_test)
-
-#' As you can see, progressively more noisy versions of the same task. If we look
-#' at the training set in the same way, the task look a lot harder. `y3` and `y4`
-#' may look hopeless, even:
-
-facet_plot(data_train)
-
-#' Let's import the neural net-related modules. The surprisingly named
-#' `keras.backend` is a module containing lower level operations, compared to the
-#' neural net abstraction, like sums and products, while providing *backend
-#' abstraction*. A backend for Keras is one of several neural net libraries that
-#' implement the machine learning algorithms all the way to the metal, including,
-#' optionally, the GPU. Keras is just a thin layer on top of them, but a very well
-#' designed one. For this work, if you are interested, the backend was Theano.
-
-
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    import keras as K
-import keras.backend as kb
-
-#' Let's now define out neural net model. I picked a multi-layer perceptron
-#' with 10 layers so as to allow enough steps for the task to be solved in an
-#' integrated fashion. One big novelty about deep learning is that we have the
-#' possibility of sharing internal representations between tasks, whereas with
-#' shallow models, neural or not, this is not possible. I did not tinker much
-#' with sizing since I didn't want to bias the results of the experiments. One
-#' thing I did tinker with a little, reluctantly, were the `patience` parameter
-#' in the *early stopping* rule and the `epsilon` parameter in the *Adam*
-#' optimizer. This was to counter a pernicious tendency of the optimization to
-#' reverse course, that is increase the loss, some time drastically, towards
-#' the end of the fitting process. Apparently the Adam optimizer is prone, when
-#' gradients are very small, to running into numerical stability issues, and
-#' increasing the epsilon parameter helps with that, while slowing the learning
-#' process. Increasing the `patience` parameter has the effect of continuing
-#' the optimization even when *plateaus* of very low gradient are reached.
+#' Let's now define a neural net model. I picked a multi-layer perceptron with
+#' 10 layers so as to allow enough steps for the tasks to be solved in an
+#' integrated fashion. One big novelty about [deep
+#' learning](http://pages.cs.wisc.edu/~dyer/cs540/handouts/deep-learning-nature2015.pdf)
+#' is that we have the possibility of [sharing internal
+#' representations](http://papers.nips.cc/paper/959-learning-many-related-tasks-at-the-same-time-with-backpropagation.pdf)
+#' between tasks, whereas with shallow models, neural or not, this is not
+#' possible. I did not tinker much with sizing, since I didn't want to bias the
+#' results of the experiments.  One thing I did tinker with a little,
+#' reluctantly, were the `patience` parameter in the *early stopping* rule and
+#' the `epsilon` parameter in the *Adam* optimizer. This was to counter a
+#' pernicious tendency of the optimization to reverse course, that is increase
+#' the loss, some time drastically, towards the end of the fitting process.
+#' Apparently the Adam optimizer is
+#' [prone](https://github.com/pytorch/pytorch/issues/1767), when gradients are
+#' very small, to running into numerical stability issues, and increasing the
+#' epsilon parameter helps with that, while slowing the learning process.
+#' Increasing the `patience` parameter has the effect of continuing the
+#' optimization even when *plateaus* of very low gradient are reached.
 #' Decreasing it results in the fitting process to stop before it has reached a
 #' local minumum, because of the randomness intrinsic to Stochastic Gradient
-#' Descent, on which Adam is based. It is unfortunate the all these optimizers
-#' have so many knobs that may need to be accessed to achieve good performance.
-#' Not only they are laborious to operate, but they also cast a shadow of
-#' "secret sauce" on these methods, meaning that they don't work reliably unless
-#' considerable know-how is provided by the practicioner.
+#' Descent, on which Adam is based. It is unfortunate that many if not all of
+#' these optimizers have so many knobs that may need to be accessed to achieve
+#' good performance.  Not only are they laborious to operate, but they can also
+#' get us lost in Andrew Gelman's so-called [Garden of Forking Paths](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.709.5937&rep=rep1&type=pdf), whereby
+#' we can run into overfitting without being aware of it.  The importance of
+#' this is starting to be [recognized](https://twitter.com/goodfellow_ian/status/978342148402593792) by the most alert members of the ML
+#' community, but is a well established theme in statistics (multiple testing
+#' correction, false discovery rate etc.)
 
+#+ source="mtl.NN_experiment"
+NN_hetero_mse, hist_hetero_mse = mtl.NN_experiment(
+    data_hetero_train, data_hetero_stop, kl.mean_squared_error)
 
-def NN_experiment(data_train, data_stop, loss):
-    U = 100
-    L = 10
-    NN = K.models.Sequential([
-        K.layers.Dense(
-            input_shape=(1, ), units=U, activation=K.activations.relu)
-    ] + [
-        K.layers.Dense(units=U, activation=K.activations.relu)
-        for _ in range(L - 1)
-    ] + [K.layers.Dense(n_tasks, activation="linear")])
-    NN.compile(optimizer=K.optimizers.Adam(epsilon=1E-3), loss=loss)
-    hist = NN.fit(
-        x=data_train["x"].values,
-        y=data_train.iloc[:, range(0, n_tasks)].values,
-        epochs=200,
-        callbacks=[K.callbacks.EarlyStopping(patience=5)],
-        validation_data=(data_stop["x"].values,
-                         data_stop.iloc[:, range(0, n_tasks)].values),
-        verbose=0)
-    return (NN, hist)
+#' We are storing not only the fitted model, but also a record of the training
+#' process, which enables a standard visualization of how training set
+#' and stop set losses (named `loss` and `val_loss` resp. in the graph) decrease
+#' over the epochs of training. Also please note how this function is
+#' parametrized on the loss function, which will allow us to perform the central
+#' comparison in this post.
+#+ results="hidden", echo = False
+mtl.loss_plot(hist_hetero_mse)
 
+#' And here is a look at the actual predictions. You be the judge if they are
+#' any good; later we will try to compare this and the novel approach
+#' in a more rigorous way.
+#+ results="hidden", echo = False
+mtl.multi_line_plot(
+    mtl.make_pred(NN_hetero_mse, data_hetero_test["x"]), data_hetero_test["y"])
 
-NN_homo, hist_homo = NN_experiment(data_train, data_stop,
-                                   K.losses.mean_squared_error)
+#' Now we are going to repeat this is experiment substituting the standard MSE
+#' loss with the one derived in the previous post on this subject. As you can
+#' see the implementation in Keras is simple but one has to substitute standard vector
+#' operations with  Keras low level ones, and make sure to use the correct
+#' *axis* when operating on tensors.
+#+ source="mtl.mean_squared_error_hetero"
+NN_hetero_mseh, hist_hetero_mseh = mtl.NN_experiment(
+    data_hetero_train, data_hetero_stop, mtl.mean_squared_error_hetero)
 
+#' The same loss plot as before for completeness:
 
-def loss_plot(hist):
-    hist.history["epoch"] = hist.epoch
-    data = pd.DataFrame(hist.history)
-    print(gg.ggplot(
-        data=data.melt(id_vars=["epoch"], var_name="metric"),
-        aesthetics=gg.aes(x="epoch", y="value", color="metric")) +
-          gg.scale_y_log() + gg.geom_line())
+#+ results="hidden", echo = False
+mtl.loss_plot(hist_hetero_mseh)
 
+#' And the line plot:
+#+ results="hidden", echo = False
+mtl.multi_line_plot(
+    mtl.make_pred(NN_hetero_mseh, data_hetero_test["x"]),
+    data_hetero_test["y"])
 
-#'  Some text
+#' Is it better? Let's look into it:
 
-loss_plot(hist_homo)
+#+ source="mtl.compare_performance"
+cperf = mtl.compare_performance(NN_hetero_mse, NN_hetero_mseh,
+                                data_hetero_test, data_hetero_test["y"])
 
-#' Some text
+#' And, comparing task by task, it looks like it mostly is:
 
+cperf.iloc[0] / cperf.iloc[1]
 
-def make_pred(NN, data, target):
-    pred = pd.DataFrame(NN.predict(x=data["x"]), index=data.index)
-    pred.columns = ["y" + str(c) for c in pred.columns]
-    pred["x"] = data["x"]
-    return pd.concat([pred, target], axis=1, join="inner")
+#' The most alert readers for sure are aware of the [reproducibility
+#' crisis](https://en.wikipedia.org/wiki/Replication_crisis) in the sciences,
+#' whereby many published results do not stand the test of time.  This is a
+#' [complex subject](http://scienceincrisis.info/), but one important factor is
+#' that sometimes surprising and interesting and therefore very publishable
+#' results occur by chance.  Sometimes luck is enhanced, deliberately or not, by
+#' the researcher, operating on various analysis "knobs" or discarding "bad
+#' data" (also known with the suave term of "data cleaning") or modifying the
+#' metric of interest or the research question until something "interesting" but
+#' random shows up.  The reviewing and publication process creates the wrong
+#' incentives by insisting more on novelty than methodological rigor.  In AI
+#' research [this problem](http://science.sciencemag.org/content/359/6377/725)
+#' is compounded by frantic competition, automation of hyperparameter search and
+#' by the dominance of a few very prominent benchmark datasets that have been
+#' studied in depth, therefore there isn't any data that can be used as a
+#' separate test set anymore. In this post, working on a small synthetic
+#' dataset, we have the opportunity to repeat the experiment many times and see
+#' what happens:
+#+ source = "mtl.one_replication", results = "hidden"
+_
+#+ source = "mtl.many_replications", results="hidden"
+pstats_hetero = mtl.many_replications_(mtl.make_data_hetero)
+pstats_hetero.plot.box(logy=True)
 
+#' Now we have a better understanding of how the new loss function helps in
+#' majority of cases, but can also hurt sometimes.
 
-#' Some text
+#' ## Learning the $$\sin$$ function with multiple phases
 
+#' We change tack now by tackling with the same techniques a problem where, like
+#' in many AI problems, the challenge is not randomness in the data but just the
+#' complexity of the tasks. Specifically, we are going to try to fit a neural
+#' model to 5 shifted versions of the the $$\sin$$ function, with no added noise.
+#+ source ="mtl.make_data_phase"
+data_phase = mtl.make_data_phase()
 
-def multi_line_plot(data):
-    print(gg.ggplot(
-        data=data.melt(id_vars=["x"]),
-        aesthetics=gg.aes(x="x", y="value", color="variable")) +
-          gg.geom_line())
+#' We split the data exactly as before:
 
+data_phase_train, data_phase_stop, data_phase_test = mtl.split_data(data_phase)
 
-#' Some text
+#' Let's take a look at the training data. Here the 5 tasks are equally
+#' difficult and, since the data is noise-free, it's more a function
+#' approximation problem than a statistical problem.
+#+ results="hidden", echo = False
+mtl.facet_plot(data_phase_train)
 
-multi_line_plot(make_pred(NN_homo, data_test, pd.DataFrame({"y": y})))
+#' We can reuse the same code as in the first part of this post, starting with
+#' the standard MSE loss:
 
-#' Some text
+NN_phase_mse, hist_phase_mse = mtl.NN_experiment(
+    data_phase_train, data_phase_stop, kl.mean_squared_error)
 
+#' We examine as usual the loss dynamic to diagnose any problems in the fitting
+#' process:
+#+ results="hidden", echo = False
+mtl.loss_plot(hist_phase_mse)
 
-def mean_squared_error_hetero(y_true, y_pred):
-    return kb.exp(
-        kb.mean(kb.log(kb.mean(kb.square(y_pred - y_true), axis=0)), axis=-1))
+#' Next, we take a look at the results:
+#+ results="hidden", echo = False
+mtl.facet_plot(mtl.make_pred(NN_phase_mse, data_phase_test["x"]))
 
+#' Now we switch to the multitask loss:
 
-#' Some text
+NN_phase_mseh, hist_phase_mseh = mtl.NN_experiment(
+    data_phase_train, data_phase_stop, mtl.mean_squared_error_hetero)
 
-NN_hetero, hist_hetero = NN_experiment(data_train, data_stop,
-                                       mean_squared_error_hetero)
+#' Take a look at the loss plot (please note some instability at the end of the
+#' process, as noted before a known problem with the Adam optimizer)
+#+ results="hidden", echo = False
+mtl.loss_plot(hist_phase_mseh)
 
-#' Some text
+#' And a look at the predictions:
+#+ results="hidden", echo = False
+mtl.facet_plot(mtl.make_pred(NN_phase_mseh, data_phase_test["x"]))
 
-loss_plot(hist_hetero)
+#' They don't look great and a quantitative assessment confirms that impression:
 
-#' Some text
+cperf = mtl.compare_performance(NN_phase_mse, NN_phase_mseh, data_phase_test,
+                                data_phase_test)
+cperf.iloc[0] / cperf.iloc[1]
 
-multi_line_plot(make_pred(NN_hetero, data_test, pd.DataFrame({"y": y})))
+#' Was it a fluke? Replication to the rescue!
+#+ results = "hidden"
+pstats_phase = mtl.many_replications_(mtl.make_data_phase)
+pstats_phase.plot.box(logy=True)
 
-#' Some text
+#' It does indeed look like the first run was not particularly lucky. The
+#' boxplot shows instead that the multitask loss outperforms the MSE loss even
+#' when there is no difference between the tasks in this particular example
+#' &mdash; which, we need to remark, is qualitatively very different from the
+#' image analysis application for which this idea was developed.
 
-comp_perf = pd.DataFrame([
-    make_pred(NN, data_test, pd.DataFrame({
-        "y": y
-    })).subtract(data_test["y"], axis=0).iloc[:, range(5)].pow(2).mean()
-    for NN in (NN_homo, NN_hetero)
-])
-comp_perf
-
-#' Some text
-
-comp_perf.iloc[0] / comp_perf.iloc[1]
-
-#' Some text
-
-import pickle
-import os
-os.chdir('../multitask-learn')
-with open("pstats.cpickle", "rb") as f:
-    pstats = pickle.load(f, encoding='latin1')
-pstats.head()
-
-#' Some text
-
-#%matplotlib inline
-pstats.plot.box(logy=True)
-
-#' Some text
-
-data_harmo = pd.DataFrame({
-    "y" + str(i):
-    [math.sin((x * 2 + float(i) / n_tasks) * math.pi) for x in xx]
-    for i in range(n_tasks)
-})
-data_harmo["x"] = xx
-data_harmo.head()
-
-#' Some text
-
-data_harmo_train, data_harmo_stop, data_harmo_test = split_data(data_harmo)
-
-#' Some text
-
-facet_plot(data_harmo_test)
-
-#' Some text
-
-facet_plot(data_harmo_train)
-
-#' Some text
-
-NN_harmo, hist_harmo = NN_experiment(data_harmo_train, data_harmo_stop,
-                                     K.losses.mean_squared_error)
-
-#' Some text
-
-loss_plot(hist_harmo)
-
-#' Some text
-
-facet_plot(make_pred(NN_harmo, data_harmo_test, None))
-
-#' Some text
-
-NN_hh, hist_hh = NN_experiment(data_harmo_train, data_harmo_stop,
-                               mean_squared_error_hetero)
-
-#' Some text
-
-loss_plot(hist_hh)
-
-#' Some text
-
-facet_plot(make_pred(NN_hh, data_harmo_test, data_harmo_test))
+#' ## Conclusions
