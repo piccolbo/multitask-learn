@@ -26,7 +26,7 @@ kb.exp(
 #' the loss function was derived and show the increase in performance over
 #' regular MSE.  A different example  that doesn't fit so well the assumptions
 #' will follow.  Only the ML-related code is shown here, but the rest is
-#' [available](https://github.com/piccolbo/multitask)
+#' [available](https://github.com/piccolbo/multitask-learn)
 
 #+ echo=False, results="hidden"
 import numpy as np
