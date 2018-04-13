@@ -151,9 +151,10 @@ def facet_plot(data):
     """
     # importing on demand to avoid issues on OS X with frameworks
     import ggplot as gg
-    print(gg.ggplot(
-        data=data.melt(id_vars=["x"]), aesthetics=gg.aes(x="x", y="value")) +
-          gg.geom_point(size=2) + gg.facet_wrap("variable"))
+    print(
+        gg.ggplot(
+            data=data.melt(id_vars=["x"]), aesthetics=gg.aes(x="x", y="value"))
+        + gg.geom_point(size=2) + gg.facet_wrap("variable"))
 
 
 def loss_plot(hist):
@@ -174,10 +175,11 @@ def loss_plot(hist):
     import ggplot as gg
     hist.history["epoch"] = hist.epoch
     data = pd.DataFrame(hist.history)
-    print(gg.ggplot(
-        data=data.melt(id_vars=["epoch"], var_name="metric"),
-        aesthetics=gg.aes(x="epoch", y="value", color="metric")) +
-          gg.scale_y_log() + gg.geom_line())
+    print(
+        gg.ggplot(
+            data=data.melt(id_vars=["epoch"], var_name="metric"),
+            aesthetics=gg.aes(x="epoch", y="value", color="metric")) +
+        gg.scale_y_log() + gg.geom_line())
 
 
 def multi_line_plot(data, target):
@@ -199,10 +201,11 @@ def multi_line_plot(data, target):
     # importing on demand to avoid issues on OS X with frameworks
     import ggplot as gg
     data = pd.concat([data, target], axis=1, join="inner")
-    print(gg.ggplot(
-        data=data.melt(id_vars=["x"]),
-        aesthetics=gg.aes(x="x", y="value", color="variable")) +
-          gg.geom_line())
+    print(
+        gg.ggplot(
+            data=data.melt(id_vars=["x"]),
+            aesthetics=gg.aes(x="x", y="value", color="variable")) +
+        gg.geom_line())
 
 
 def make_pred(NN, x):
@@ -314,6 +317,10 @@ def print_table(df):
         Description of returned object.
 
     """
-
-    print(tab.tabulate(
-        df, headers="keys", showindex=False, floatfmt=".2f", tablefmt="pipe"))
+    print(
+        tab.tabulate(
+            df,
+            headers="keys",
+            showindex=False,
+            floatfmt=".2f",
+            tablefmt="pipe"))
