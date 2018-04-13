@@ -1,7 +1,9 @@
 #' ---
 #' layout: "post"
 #' title: "A Simple Loss Function for Multi-Task learning with Keras implementation, part&nbsp;2"
-#' date: "2018-03-23 10:45"
+#+ echo=False
+import datetime as dt
+#'date: <%dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")%>
 #' ---
 
 
